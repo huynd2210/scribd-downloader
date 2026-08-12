@@ -15,6 +15,7 @@ Key behaviors:
 """
 
 import base64
+import io
 import os
 import re
 import shutil
@@ -39,6 +40,11 @@ HEADLESS_ENABLED = os.getenv("SCRIBD_HEADLESS", "1").strip().lower() not in {
 }
 DEFAULT_PAPER_WIDTH_INCHES = 7.25
 DEFAULT_PAPER_HEIGHT_INCHES = 10.5
+TRIM_BLANK_EDGE_PAGES = os.getenv("SCRIBD_TRIM_BLANK_EDGE_PAGES", "1").strip().lower() not in {
+    "0",
+    "false",
+    "no",
+}
 
 
 def build_chrome_options():
@@ -55,6 +61,7 @@ def build_chrome_options():
     options.add_argument("--no-sandbox")
     options.add_argument("--disable-dev-shm-usage")
     options.add_argument("--disable-gpu")
+    options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
     options.add_argument("--remote-debugging-port=0")
     options.add_argument(f"--user-data-dir={runtime_profile_dir}")
     options.add_argument("--disable-blink-features=AutomationControlled")
@@ -78,7 +85,7 @@ def convert_scribd_link(url):
         The embeddable content URL, or "Invalid Scribd URL" if no document id
         can be extracted.
     """
-    match = re.search(r"https://www\.scribd\.com/(?:document|doc)/(\d+)/", url)
+    match = re.search(r"https://www\.scribd\.com/(?:document|doc)/(\d+)", url)
     if not match:
         return "Invalid Scribd URL"
 
@@ -321,7 +328,8 @@ def inject_print_styles(driver):
 
         const style = document.createElement('style');
         style.id = 'scribd-print-styles';
-        style.textContent = `
+        
+        let cssText = `
             [class*="cookie"],
             [class*="Cookie"],
             [class*="consent"],
@@ -355,11 +363,6 @@ def inject_print_styles(driver):
             }
 
             @media print {
-                @page {
-                    size: 7.25in 10.5in;
-                    margin: 0;
-                }
-
                 html,
                 body {
                     margin: 0 !important;
@@ -411,11 +414,34 @@ def inject_print_styles(driver):
             }
         `;
 
+        // Generate individual @page rules for each .outer_page dynamically
+        const outerPages = Array.from(document.querySelectorAll('.outer_page'));
+        outerPages.forEach((page, index) => {
+            const rect = page.getBoundingClientRect();
+            const widthInches = rect.width / 96;
+            const heightInches = rect.height / 96;
+            const pageName = `page_size_${index}`;
+            
+            cssText += `
+                @page ${pageName} {
+                    size: ${widthInches.toFixed(3)}in ${heightInches.toFixed(3)}in;
+                    margin: 0;
+                }
+                
+                @media print {
+                    .outer_page:nth-of-type(${index + 1}) {
+                        page: ${pageName} !important;
+                    }
+                }
+            `;
+        });
+
+        style.textContent = cssText;
         document.head.appendChild(style);
         """
     )
 
-    print("Print CSS injected.")
+    print("Print CSS injected dynamically for individual page sizes.")
 
 
 def wait_for_render_stability(driver, timeout_seconds):
@@ -588,6 +614,87 @@ def read_pdf_stream_to_file(driver, stream_handle, filename):
         driver.execute_cdp_cmd("IO.close", {"handle": stream_handle})
 
 
+def is_blank_pdf_page(page):
+    """Return True when a PDF page has no visible document content."""
+    contents = page.get_contents()
+    if contents is None:
+        return True
+
+    try:
+        if isinstance(contents, list):
+            content_data = b"".join(content.get_data() for content in contents)
+        else:
+            content_data = contents.get_data()
+
+        stripped_content = content_data.strip()
+        if not stripped_content:
+            return True
+
+        resources = page.get("/Resources") or {}
+        has_xobjects = bool(resources.get("/XObject"))
+        has_fonts = bool(resources.get("/Font"))
+        has_text = bool((page.extract_text() or "").strip())
+
+        # Chrome can emit empty leading/trailing print sheets as a single
+        # background rectangle. They have a short stream but no text, fonts, or
+        # page image XObjects.
+        return (
+            len(stripped_content) <= 512
+            and not has_xobjects
+            and not has_fonts
+            and not has_text
+        )
+    except Exception:
+        return False
+
+
+def trim_blank_edge_pages(filename):
+    """Remove blank leading/trailing PDF pages left by Chrome print pagination."""
+    if not TRIM_BLANK_EDGE_PAGES:
+        return 0
+
+    try:
+        from pypdf import PdfReader, PdfWriter
+    except ImportError:
+        print("pypdf is not installed; skipping blank edge page trim.")
+        return 0
+
+    reader = PdfReader(filename)
+    page_count = len(reader.pages)
+    if page_count == 0:
+        return 0
+
+    first_page = 0
+    last_page = page_count - 1
+
+    while first_page <= last_page and is_blank_pdf_page(reader.pages[first_page]):
+        first_page += 1
+
+    while last_page >= first_page and is_blank_pdf_page(reader.pages[last_page]):
+        last_page -= 1
+
+    if first_page > last_page:
+        print("PDF appears to contain only blank pages; skipping blank edge page trim.")
+        return 0
+
+    trimmed_count = page_count - (last_page - first_page + 1)
+    if trimmed_count == 0:
+        return 0
+
+    writer = PdfWriter()
+    for page_index in range(first_page, last_page + 1):
+        writer.add_page(reader.pages[page_index])
+
+    output_buffer = io.BytesIO()
+    writer.write(output_buffer)
+
+    with open(filename, "wb") as file_handle:
+        file_handle.write(output_buffer.getvalue())
+
+    print(f"Trimmed {trimmed_count} blank edge page(s) from PDF.")
+    return trimmed_count
+
+
 def save_pdf_directly(
     driver,
     filename,
@@ -619,7 +726,7 @@ def save_pdf_directly(
         "marginBottom": 0,
         "marginLeft": 0,
         "marginRight": 0,
-        "preferCSSPageSize": False,
+        "preferCSSPageSize": True,
     }
 
     try:
@@ -645,15 +752,45 @@ def save_pdf_directly(
             with open(filename, "wb") as file_handle:
                 file_handle.write(pdf_data)
 
+        trim_blank_edge_pages(filename)
         return os.path.abspath(filename)
     except Exception as error:
         print(f"Error saving PDF: {error}")
         return None
 
 
+def append_to_tracker(title, url, filename, file_path, pages):
+    tracker_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "downloads_tracker.md"))
+    if not os.path.exists(tracker_path):
+        header = (
+            "# Scribd Downloads Tracker\n\n"
+            "This file tracks all documents that have been successfully downloaded using the Scribd Downloader utility.\n\n"
+            "| Date & Time | Document Title | Original Scribd URL | PDF Filename | File Path | Pages | Size (MB) | Notes / Compression |\n"
+            "| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |\n"
+        )
+        with open(tracker_path, "w", encoding="utf-8") as f:
+            f.write(header)
+
+    import datetime
+    timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
+    size_mb = os.path.getsize(file_path) / (1024 * 1024)
+    file_url = f"[Link](file:///{file_path.replace('\\\\', '/').replace('\\', '/')})"
+    
+    # Strip any trailing ' | Scribd' from the page title
+    clean_title = title.split(" | Scribd")[0].strip()
+    
+    line = f"| {timestamp} | {clean_title} | `{url}` | `{filename}` | {file_url} | {pages} | {size_mb:.2f} MB | High Quality (Uncompressed) |\n"
+    with open(tracker_path, "a", encoding="utf-8") as f:
+        f.write(line)
+
+
 def main():
-    """Run the downloader interactively."""
-    input_url = input("Input link Scribd: ").strip()
+    """Run the downloader interactively or via CLI arguments."""
+    import sys
+    if len(sys.argv) > 1:
+        input_url = sys.argv[1].strip()
+    else:
+        input_url = input("Input link Scribd: ").strip()
 
     converted_url = convert_scribd_link(input_url)
     pdf_filename = get_filename_from_url(input_url)
@@ -685,11 +822,11 @@ def main():
         if total_pages == 0:
             raise RuntimeError("No printable Scribd pages were detected on the embed page.")
 
+        paper_size = detect_document_paper_size(driver)
         prepare_document_for_print(driver)
         inject_print_styles(driver)
         wait_for_render_stability(driver, DEFAULT_RENDER_SETTLE_TIMEOUT_SECONDS)
         driver.execute_cdp_cmd("Emulation.setEmulatedMedia", {"media": "print"})
-        paper_size = detect_document_paper_size(driver)
 
         driver.execute_script("window.scrollTo(0, 0);")
 
@@ -708,6 +845,10 @@ def main():
             raise RuntimeError("PDF export failed.")
 
         print(f"PDF saved successfully to: {saved_path}")
+        
+        # Append download metadata to tracker file
+        doc_title = driver.title or pdf_filename.replace(".pdf", "")
+        append_to_tracker(doc_title, input_url, pdf_filename, saved_path, total_pages)
     except (RuntimeError, WebDriverException) as error:
         print(f"Download failed: {error}")
         raise SystemExit(1)
