@@ -1,0 +1,291 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description" content="Scribd Document Downloader - Fast, automated, high quality PDF converter with real-time progress preview.">
+    <title>Scribd Downloader - Professional PDF Suite</title>
+    
+    <!-- Google Fonts: Inter & JetBrains Mono -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+    
+    <!-- FontAwesome icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css" integrity="sha512-DTOQO9RWCH3ppGqcWaEA1BIZOC6xxalwEsw9c2QQeAIftl+Vegovlnee1c9QX4TctnWMn13TZye+giMm8e2LwA==" crossorigin="anonymous" referrerpolicy="no-referrer" />
+
+    <!-- Application Stylesheet -->
+    <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+    <div class="background-glow"></div>
+    <div class="background-grid"></div>
+
+    <!-- Main Container -->
+    <div class="app-layout">
+        <!-- Sidebar / Header Banner -->
+        <header class="app-header">
+            <div class="brand-container">
+                <div class="brand-icon">
+                    <i class="fa-solid fa-file-pdf"></i>
+                </div>
+                <div class="brand-text">
+                    <h1 class="brand-title">Scribd<span>Downloader</span></h1>
+                    <p class="brand-subtitle">High-Precision Automated Document Exporter</p>
+                </div>
+            </div>
+            
+            <div class="header-actions">
+                <div class="status-badge pulse-green" id="server-status">
+                    <span class="status-dot"></span>
+                    <span class="status-text">Server Ready</span>
+                </div>
+            </div>
+        </header>
+
+        <!-- Main Content Body -->
+        <main class="app-main">
+            <!-- Download Control Panel -->
+            <section class="card glass-card download-card">
+                <div class="card-header">
+                    <div class="card-title-group">
+                        <i class="fa-solid fa-cloud-arrow-down icon-accent"></i>
+                        <h2>Download Document</h2>
+                    </div>
+                    <span class="badge badge-purple">Automated CDP Engine</span>
+                </div>
+
+                <form id="download-form" onsubmit="handleDownload(event)">
+                    <div class="input-group">
+                        <label for="scribd-url">Scribd Document URL</label>
+                        <div class="input-wrapper">
+                            <i class="fa-solid fa-link input-icon"></i>
+                            <input 
+                                type="url" 
+                                id="scribd-url" 
+                                name="url" 
+                                placeholder="https://www.scribd.com/document/123456789/Document-Title" 
+                                required
+                                autocomplete="off"
+                                oninput="handleUrlInput(this.value)"
+                            />
+                            <button type="button" class="clear-btn" id="clear-url-btn" onclick="clearUrlInput()">
+                                <i class="fa-solid fa-xmark"></i>
+                            </button>
+                        </div>
+                        <div class="url-validation-msg" id="url-validation-msg"></div>
+                    </div>
+
+                    <!-- Embed Preview snippet -->
+                    <div class="embed-preview-box hidden" id="embed-preview-box">
+                        <div class="preview-info">
+                            <i class="fa-solid fa-circle-check icon-success"></i>
+                            <div>
+                                <span class="preview-label">Embed URL Generated</span>
+                                <span class="preview-url" id="embed-url-text"></span>
+                            </div>
+                        </div>
+                        <div class="output-preview">
+                            <i class="fa-solid fa-file-pdf"></i>
+                            <span id="output-filename-text">document.pdf</span>
+                        </div>
+                    </div>
+
+                    <!-- Settings Drawer Toggle -->
+                    <div class="settings-toggle-container">
+                        <button type="button" class="btn-text" onclick="toggleSettingsDrawer()">
+                            <i class="fa-solid fa-sliders"></i>
+                            <span>Advanced Export Settings</span>
+                            <i class="fa-solid fa-chevron-down toggle-arrow" id="settings-arrow"></i>
+                        </button>
+                    </div>
+
+                    <!-- Advanced Settings Drawer -->
+                    <div class="settings-drawer hidden" id="settings-drawer">
+                        <div class="settings-grid">
+                            <div class="setting-item">
+                                <label for="scroll-delay">Scroll Delay (seconds)</label>
+                                <div class="setting-input-wrapper">
+                                    <i class="fa-solid fa-clock"></i>
+                                    <input type="number" id="scroll-delay" name="scroll_delay" value="0.15" step="0.05" min="0.05" max="3.0">
+                                </div>
+                                <span class="setting-hint">Time spent waiting per page tick</span>
+                            </div>
+
+                            <div class="setting-item">
+                                <label for="cdp-timeout">CDP Timeout (seconds)</label>
+                                <div class="setting-input-wrapper">
+                                    <i class="fa-solid fa-stopwatch"></i>
+                                    <input type="number" id="cdp-timeout" name="cdp_timeout" value="600" step="10" min="30" max="3600">
+                                </div>
+                                <span class="setting-hint">Timeout for Chrome PDF render</span>
+                            </div>
+
+                            <div class="setting-item">
+                                <label for="settle-timeout">Render Settle Budget (s)</label>
+                                <div class="setting-input-wrapper">
+                                    <i class="fa-solid fa-wand-magic-sparkles"></i>
+                                    <input type="number" id="settle-timeout" name="settle_timeout" value="30" step="5" min="5" max="180">
+                                </div>
+                                <span class="setting-hint">Max wait for math/fonts to settle</span>
+                            </div>
+
+                            <div class="setting-item switch-item">
+                                <label for="headless-mode">Run Headless Chrome</label>
+                                <div class="switch-wrapper">
+                                    <input type="checkbox" id="headless-mode" name="headless" checked>
+                                    <span class="switch-slider"></span>
+                                </div>
+                                <span class="setting-hint">Runs in background without popups</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Submit Button -->
+                    <button type="submit" class="btn btn-primary btn-block btn-lg" id="submit-btn">
+                        <i class="fa-solid fa-file-arrow-down"></i>
+                        <span>Start PDF Export</span>
+                    </button>
+                </form>
+            </section>
+
+            <!-- Active Task Progress & Console Section -->
+            <section class="card glass-card task-card hidden" id="task-card">
+                <div class="card-header">
+                    <div class="card-title-group">
+                        <i class="fa-solid fa-spinner fa-spin icon-accent" id="task-spinner"></i>
+                        <h2 id="task-title">Exporting Document...</h2>
+                    </div>
+                    <span class="badge badge-blue" id="task-stage-badge">INITIALIZING</span>
+                </div>
+
+                <div class="task-body">
+                    <!-- Progress Bar & Stats -->
+                    <div class="progress-section">
+                        <div class="progress-header">
+                            <span class="progress-status-text" id="progress-status-text">Preparing browser session...</span>
+                            <span class="progress-percentage" id="progress-percent">0%</span>
+                        </div>
+                        <div class="progress-bar-container">
+                            <div class="progress-bar-fill" id="progress-bar-fill" style="width: 0%;"></div>
+                        </div>
+                        <div class="progress-counter-info">
+                            <span id="page-counter-text">Scrolled 0 / 0 pages</span>
+                            <span id="task-filename-text" class="filename-tag">document.pdf</span>
+                        </div>
+                    </div>
+
+                    <!-- Step Indicators -->
+                    <div class="step-stepper">
+                        <div class="step-item active" id="step-browser">
+                            <div class="step-icon"><i class="fa-brands fa-chrome"></i></div>
+                            <span>Browser</span>
+                        </div>
+                        <div class="step-line" id="line-1"></div>
+                        <div class="step-item" id="step-scroll">
+                            <div class="step-icon"><i class="fa-solid fa-scroll"></i></div>
+                            <span>Scroll Pages</span>
+                        </div>
+                        <div class="step-line" id="line-2"></div>
+                        <div class="step-item" id="step-style">
+                            <div class="step-icon"><i class="fa-solid fa-palette"></i></div>
+                            <span>Inject Styles</span>
+                        </div>
+                        <div class="step-line" id="line-3"></div>
+                        <div class="step-item" id="step-cdp">
+                            <div class="step-icon"><i class="fa-solid fa-file-pdf"></i></div>
+                            <span>Export PDF</span>
+                        </div>
+                    </div>
+
+                    <!-- Live Terminal Output -->
+                    <div class="console-box">
+                        <div class="console-header">
+                            <div class="console-title">
+                                <i class="fa-solid fa-terminal"></i>
+                                <span>Execution Console Log</span>
+                            </div>
+                            <button type="button" class="btn-text-sm" onclick="clearConsoleLog()">Clear</button>
+                        </div>
+                        <div class="console-logs" id="console-logs">
+                            <div class="log-line log-info">[System] Task initialized. Waiting for progress feed...</div>
+                        </div>
+                    </div>
+
+                    <!-- Completion Action Buttons -->
+                    <div class="completion-actions hidden" id="completion-actions">
+                        <button type="button" class="btn btn-success" id="btn-preview-task" onclick="previewCurrentTask()">
+                            <i class="fa-solid fa-eye"></i>
+                            <span>Preview PDF</span>
+                        </button>
+                        <a id="btn-download-task" class="btn btn-primary" download>
+                            <i class="fa-solid fa-download"></i>
+                            <span>Download PDF</span>
+                        </a>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Download History Section -->
+            <section class="card glass-card history-card">
+                <div class="card-header">
+                    <div class="card-title-group">
+                        <i class="fa-solid fa-folder-open icon-accent"></i>
+                        <h2>Downloads History</h2>
+                    </div>
+                    <div class="history-header-actions">
+                        <div class="search-input-wrapper">
+                            <i class="fa-solid fa-magnifying-glass"></i>
+                            <input type="text" id="history-search" placeholder="Search documents..." oninput="filterHistory(this.value)">
+                        </div>
+                        <button type="button" class="btn btn-secondary btn-sm" onclick="fetchDownloadsHistory()">
+                            <i class="fa-solid fa-rotate-right"></i>
+                        </button>
+                    </div>
+                </div>
+
+                <div class="history-body">
+                    <div class="history-list" id="history-list">
+                        <!-- Dynamic items loaded via JS -->
+                        <div class="empty-state" id="history-empty-state">
+                            <i class="fa-solid fa-inbox"></i>
+                            <p>No downloaded documents yet</p>
+                            <span>Enter a Scribd URL above to start exporting PDFs</span>
+                        </div>
+                    </div>
+                </div>
+            </section>
+        </main>
+
+        <!-- PDF Modal Viewer -->
+        <div class="modal-overlay hidden" id="pdf-modal">
+            <div class="modal-container glass-card">
+                <div class="modal-header">
+                    <div class="modal-title">
+                        <i class="fa-solid fa-file-pdf icon-accent"></i>
+                        <span id="modal-filename">document.pdf</span>
+                    </div>
+                    <div class="modal-controls">
+                        <a id="modal-download-link" class="btn btn-sm btn-primary" download>
+                            <i class="fa-solid fa-download"></i> Download
+                        </a>
+                        <button type="button" class="btn-icon" onclick="closePdfModal()">
+                            <i class="fa-solid fa-xmark"></i>
+                        </button>
+                    </div>
+                </div>
+                <div class="modal-body">
+                    <iframe id="pdf-iframe" src="" frameborder="0"></iframe>
+                </div>
+            </div>
+        </div>
+
+        <footer class="app-footer">
+            <p>Scribd Downloader &copy; 2026 • Powered by Selenium & Chrome DevTools Protocol</p>
+        </footer>
+    </div>
+
+    <!-- Application Script -->
+    <script src="js/app.js"></script>
+</body>
+</html>

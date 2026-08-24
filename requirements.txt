@@ -5,3 +5,5 @@ trio~=0.17
 trio-websocket~=0.9
 typing_extensions~=4.9
 websocket-client~=1.8
+fastapi>=0.100.0
+uvicorn>=0.20.0
