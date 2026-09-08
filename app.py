@@ -209,12 +209,17 @@ def list_downloads():
 
 
 @app.get("/api/downloads/{filename}")
-def get_pdf_file(filename: str):
+def get_pdf_file(filename: str, preview: bool = False):
     safe_name = os.path.basename(filename)
     file_path = os.path.join(core.OUTPUT_DIR, safe_name)
     if not os.path.exists(file_path):
         raise HTTPException(status_code=404, detail="File not found")
-    return FileResponse(file_path, media_type="application/pdf", filename=safe_name)
+    return FileResponse(
+        file_path,
+        media_type="application/pdf",
+        filename=safe_name,
+        content_disposition_type="inline" if preview else "attachment",
+    )
 
 
 @app.delete("/api/downloads/{filename}")

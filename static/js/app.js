@@ -379,7 +379,7 @@ function openPdfModal(filename) {
 
     filenameLabel.textContent = filename;
     downloadLink.href = `/api/downloads/${encodeURIComponent(filename)}`;
-    iframe.src = `/api/downloads/${encodeURIComponent(filename)}`;
+    iframe.src = `/api/downloads/${encodeURIComponent(filename)}?preview=true`;
 
     modal.classList.remove('hidden');
 }
