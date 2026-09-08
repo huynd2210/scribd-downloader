@@ -1,7 +1,8 @@
 # Scribd Downloader
 
 <p align="center">
-  <img src="assets/scribd.svg" alt="Scribd Downloader" width="180">
+  <img width="988" height="665" alt="image" src="https://github.com/user-attachments/assets/8d2094c5-b749-40eb-8b4a-fc3919650eb7" />
+
 </p>
 
 ## Installation
