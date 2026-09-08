@@ -88,6 +88,9 @@ function toggleSettingsDrawer() {
 function handleDownload(e) {
     e.preventDefault();
 
+    // Keep Enter in the multi-line URL box from triggering an implicit submit.
+    if (e.submitter !== document.getElementById('submit-btn')) return;
+
     const urlText = document.getElementById('scribd-url').value;
     const urls = parseUrls(urlText);
     if (!urls.length) return;
