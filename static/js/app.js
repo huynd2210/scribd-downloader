@@ -6,23 +6,33 @@ let currentTaskId = null;
 let eventSource = null;
 let currentPreviewFilename = null;
 let historyItemsCache = [];
+let validationRequestId = 0;
 
 document.addEventListener('DOMContentLoaded', () => {
     fetchDownloadsHistory();
 });
 
 /* URL Validation & Input Handling */
-function handleUrlInput(url) {
-    url = url.trim();
+function parseUrls(value) {
+    const seen = new Set();
+    return value
+        .split(/\r?\n/)
+        .map(url => url.trim())
+        .filter(url => url && !seen.has(url) && seen.add(url));
+}
+
+function handleUrlInput(value) {
+    const urls = parseUrls(value);
+    const requestId = ++validationRequestId;
     const validationMsg = document.getElementById('url-validation-msg');
     const embedBox = document.getElementById('embed-preview-box');
     const embedUrlText = document.getElementById('embed-url-text');
     const filenameText = document.getElementById('output-filename-text');
     const clearBtn = document.getElementById('clear-url-btn');
 
-    clearBtn.style.display = url ? 'block' : 'none';
+    clearBtn.style.display = value.trim() ? 'block' : 'none';
 
-    if (!url) {
+    if (!urls.length) {
         validationMsg.textContent = '';
         validationMsg.className = 'url-validation-msg';
         embedBox.classList.add('hidden');
@@ -32,18 +42,24 @@ function handleUrlInput(url) {
     fetch('/api/validate-url', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ url })
+        body: JSON.stringify({ url: value })
     })
     .then(res => res.json())
     .then(data => {
+        if (requestId !== validationRequestId) return;
         if (data.valid) {
-            validationMsg.textContent = '✓ Valid Scribd Document Link';
+            validationMsg.textContent = data.count > 1
+                ? `✓ ${data.count} valid Scribd document links`
+                : '✓ Valid Scribd Document Link';
             validationMsg.className = 'url-validation-msg valid';
-            embedUrlText.textContent = data.embed_url;
-            filenameText.textContent = data.filename;
+            embedUrlText.textContent = data.count > 1 ? `${data.count} documents queued` : data.embed_url;
+            filenameText.textContent = data.count > 1 ? `${data.count} PDF files` : data.filename;
             embedBox.classList.remove('hidden');
         } else {
-            validationMsg.textContent = '✕ Invalid Scribd URL format (Use document or doc link)';
+            const invalidCount = data.invalid_urls ? data.invalid_urls.length : 1;
+            validationMsg.textContent = invalidCount > 1
+                ? `✕ ${invalidCount} invalid Scribd URLs`
+                : '✕ Invalid Scribd URL format (Use document or doc link)';
             validationMsg.className = 'url-validation-msg invalid';
             embedBox.classList.add('hidden');
         }
@@ -72,8 +88,9 @@ function toggleSettingsDrawer() {
 function handleDownload(e) {
     e.preventDefault();
 
-    const url = document.getElementById('scribd-url').value.trim();
-    if (!url) return;
+    const urlText = document.getElementById('scribd-url').value;
+    const urls = parseUrls(urlText);
+    if (!urls.length) return;
 
     const scroll_delay = parseFloat(document.getElementById('scroll-delay').value) || 0.15;
     const cdp_timeout = parseInt(document.getElementById('cdp-timeout').value) || 600;
@@ -87,7 +104,7 @@ function handleDownload(e) {
     fetch('/api/download', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ url, scroll_delay, cdp_timeout, settle_timeout, headless })
+        body: JSON.stringify({ url: urlText, scroll_delay, cdp_timeout, settle_timeout, headless })
     })
     .then(res => {
         if (!res.ok) throw new Error('Server returned invalid response.');
@@ -95,28 +112,39 @@ function handleDownload(e) {
     })
     .then(data => {
         currentTaskId = data.task_id;
-        showTaskCard(data.filename);
+        showTaskCard(data.filename, data.document_count || 1);
         connectEventSource(data.task_id);
     })
     .catch(err => {
         alert('Failed to start download task: ' + err.message);
-        submitBtn.disabled = false;
-        submitBtn.querySelector('span').textContent = 'Start PDF Export';
+        resetSubmitButton();
     });
 }
 
+function resetSubmitButton() {
+    const submitBtn = document.getElementById('submit-btn');
+    submitBtn.disabled = false;
+    submitBtn.querySelector('span').textContent = 'Start PDF Export';
+}
+
 /* Task Progress UI & Streaming Log Reader */
-function showTaskCard(filename) {
+function showTaskCard(filename, documentCount = 1) {
     const taskCard = document.getElementById('task-card');
     taskCard.classList.remove('hidden');
 
-    document.getElementById('task-filename-text').textContent = filename;
-    document.getElementById('task-title').textContent = 'Exporting Document...';
+    document.getElementById('task-filename-text').textContent = documentCount > 1
+        ? `${documentCount} documents queued`
+        : filename;
+    document.getElementById('task-title').textContent = documentCount > 1
+        ? `Exporting ${documentCount} Documents...`
+        : 'Exporting Document...';
     document.getElementById('task-stage-badge').textContent = 'INITIALIZING';
     document.getElementById('progress-percent').textContent = '0%';
     document.getElementById('progress-bar-fill').style.width = '0%';
     document.getElementById('page-counter-text').textContent = 'Scrolled 0 pages';
     document.getElementById('completion-actions').classList.add('hidden');
+    document.getElementById('completion-summary').textContent = '';
+    document.getElementById('completion-downloads').innerHTML = '';
 
     clearConsoleLog();
     addConsoleLog('[System] Initiating headless browser session...', 'log-info');
@@ -139,9 +167,7 @@ function connectEventSource(taskId) {
 
         if (data.status === 'COMPLETED' || data.status === 'FAILED') {
             eventSource.close();
-            const submitBtn = document.getElementById('submit-btn');
-            submitBtn.disabled = false;
-            submitBtn.querySelector('span').textContent = 'Start PDF Export';
+            resetSubmitButton();
         }
     };
 
@@ -160,9 +186,7 @@ function pollTaskStatus(taskId) {
                 updateTaskProgressUI(data);
                 if (data.status === 'COMPLETED' || data.status === 'FAILED') {
                     clearInterval(interval);
-                    const submitBtn = document.getElementById('submit-btn');
-                    submitBtn.disabled = false;
-                    submitBtn.querySelector('span').textContent = 'Start PDF Export';
+                    resetSubmitButton();
                 }
             });
     }, 1000);
@@ -174,13 +198,18 @@ function updateTaskProgressUI(data) {
     const progressFill = document.getElementById('progress-bar-fill');
     const counterText = document.getElementById('page-counter-text');
     const statusText = document.getElementById('progress-status-text');
+    const filenameText = document.getElementById('task-filename-text');
 
     stageBadge.textContent = data.stage || data.status;
     percentText.textContent = `${data.progress_percent || 0}%`;
     progressFill.style.width = `${data.progress_percent || 0}%`;
 
+    if (data.filename) filenameText.textContent = data.filename;
     if (data.total_pages > 0) {
-        counterText.textContent = `Scrolled ${data.current_page} / ${data.total_pages} pages`;
+        const documentProgress = data.total_documents > 1
+            ? `Document ${data.current_document} / ${data.total_documents} · `
+            : '';
+        counterText.textContent = `${documentProgress}Scrolled ${data.current_page} / ${data.total_pages} pages`;
     }
 
     // Process new log lines
@@ -209,11 +238,15 @@ function updateTaskProgressUI(data) {
             updateStepper('step-cdp');
             break;
         case 'COMPLETED':
-            statusText.textContent = 'PDF generated successfully!';
-            document.getElementById('task-title').textContent = 'Export Complete!';
+            statusText.textContent = data.failed_documents
+                ? `Finished with ${data.failed_documents} failed document(s).`
+                : 'PDF generated successfully!';
+            document.getElementById('task-title').textContent = data.failed_documents
+                ? 'Export Complete with Errors'
+                : 'Export Complete!';
             document.getElementById('task-spinner').className = 'fa-solid fa-circle-check icon-success';
             completeAllStepper();
-            showCompletionActions(data.result);
+            showCompletionActions(data);
             fetchDownloadsHistory();
             break;
         case 'ERROR':
@@ -224,19 +257,49 @@ function updateTaskProgressUI(data) {
     }
 }
 
-function showCompletionActions(result) {
-    if (!result) return;
-    currentPreviewFilename = result.filename;
+function showCompletionActions(task) {
+    const results = task.results && task.results.length
+        ? task.results
+        : task.result
+            ? [task.result]
+            : [];
     const actionsBox = document.getElementById('completion-actions');
-    const downloadBtn = document.getElementById('btn-download-task');
-    downloadBtn.href = `/api/downloads/${encodeURIComponent(result.filename)}`;
-    actionsBox.classList.remove('hidden');
-}
+    const summary = document.getElementById('completion-summary');
+    const downloadsBox = document.getElementById('completion-downloads');
 
-function previewCurrentTask() {
-    if (currentPreviewFilename) {
-        openPdfModal(currentPreviewFilename);
-    }
+    if (!results.length) return;
+
+    currentPreviewFilename = results[0].filename;
+    summary.textContent = task.failed_documents
+        ? `Downloaded ${results.length} of ${task.total_documents} documents.`
+        : `Downloaded ${results.length} document(s).`;
+    downloadsBox.innerHTML = '';
+
+    results.forEach(result => {
+        const row = document.createElement('div');
+        row.className = 'completion-download-item';
+
+        const filename = document.createElement('span');
+        filename.className = 'completion-filename';
+        filename.textContent = result.filename;
+
+        const previewButton = document.createElement('button');
+        previewButton.type = 'button';
+        previewButton.className = 'btn btn-success btn-sm';
+        previewButton.innerHTML = '<i class="fa-solid fa-eye"></i> Preview';
+        previewButton.addEventListener('click', () => openPdfModal(result.filename));
+
+        const downloadLink = document.createElement('a');
+        downloadLink.className = 'btn btn-primary btn-sm';
+        downloadLink.href = `/api/downloads/${encodeURIComponent(result.filename)}`;
+        downloadLink.setAttribute('download', '');
+        downloadLink.innerHTML = '<i class="fa-solid fa-download"></i> Download';
+
+        row.append(filename, previewButton, downloadLink);
+        downloadsBox.appendChild(row);
+    });
+
+    actionsBox.classList.remove('hidden');
 }
 
 /* Stepper logic */

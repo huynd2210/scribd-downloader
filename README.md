@@ -29,7 +29,7 @@ Start the web interface:
 python run_ui.py
 ```
 
-Open `http://127.0.0.1:8000`, paste a Scribd document URL, and download the PDF.
+Open `http://127.0.0.1:8000`, paste one or more Scribd URLs (one per line), and download the PDFs.
 
 You can also use the command line:
 

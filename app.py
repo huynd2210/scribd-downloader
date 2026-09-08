@@ -34,15 +34,39 @@ class DownloadRequest(BaseModel):
     headless: bool = Field(True)
 
 
+def parse_download_urls(raw_urls: str) -> List[str]:
+    """Return unique, non-empty URLs pasted one per line."""
+    urls = []
+    seen = set()
+    for raw_url in re.split(r"[\r\n]+", raw_urls or ""):
+        url = raw_url.strip()
+        if url and url not in seen:
+            urls.append(url)
+            seen.add(url)
+    return urls
+
+
 @app.post("/api/validate-url")
 def validate_url(data: Dict[str, str]):
-    url = data.get("url", "").strip()
-    converted = core.convert_scribd_link(url)
-    filename = core.get_filename_from_url(url) if converted != "Invalid Scribd URL" else ""
+    urls = parse_download_urls(data.get("url", ""))
+    items = []
+    for url in urls:
+        converted = core.convert_scribd_link(url)
+        items.append({
+            "url": url,
+            "valid": converted != "Invalid Scribd URL",
+            "embed_url": converted,
+            "filename": core.get_filename_from_url(url) if converted != "Invalid Scribd URL" else "",
+        })
+
+    first_item = items[0] if items else {}
     return {
-        "valid": converted != "Invalid Scribd URL",
-        "embed_url": converted,
-        "filename": filename,
+        "valid": bool(items) and all(item["valid"] for item in items),
+        "count": len(items),
+        "invalid_urls": [item["url"] for item in items if not item["valid"]],
+        "items": items,
+        "embed_url": first_item.get("embed_url", ""),
+        "filename": first_item.get("filename", ""),
     }
 
 
@@ -58,52 +82,103 @@ def broadcast_task_update(task_id: str):
                 pass
 
 
-def run_download_task(task_id: str, req: DownloadRequest):
+def run_download_task(task_id: str, req: DownloadRequest, urls: List[str]):
     task = tasks_db[task_id]
 
     def status_callback(stage: str):
-        task["stage"] = stage
+        task["stage"] = {
+            "COMPLETED": "DOCUMENT_COMPLETED",
+            "ERROR": "DOCUMENT_FAILED",
+        }.get(stage, stage)
 
     def progress_callback(current: int, total: int):
         task["current_page"] = current
         task["total_pages"] = total
-        task["progress_percent"] = round((current / total) * 100, 1) if total > 0 else 0
+        current_progress = (current / total) if total > 0 else 0
+        task["progress_percent"] = round(
+            ((task["current_document"] - 1 + current_progress) / task["total_documents"]) * 100,
+            1,
+        )
 
     def log_callback(msg: str):
         task["logs"].append(msg)
 
-    try:
-        result = core.download_document(
-            input_url=req.url,
-            scroll_delay=req.scroll_delay,
-            cdp_timeout=req.cdp_timeout,
-            settle_timeout=req.settle_timeout,
-            headless=req.headless,
-            status_cb=status_callback,
-            progress_cb=progress_callback,
-            log_cb=log_callback,
-        )
-        task["status"] = "COMPLETED"
-        task["stage"] = "COMPLETED"
-        task["progress_percent"] = 100.0
-        task["result"] = result
-    except Exception as exc:
+    for document_number, url in enumerate(urls, start=1):
+        task["current_document"] = document_number
+        task["current_url"] = url
+        task["filename"] = core.get_filename_from_url(url)
+        task["current_page"] = 0
+        task["total_pages"] = 0
+        task["documents"][document_number - 1]["status"] = "RUNNING"
+        log_callback(f"Starting document {document_number}/{task['total_documents']}: {url}")
+
+        try:
+            result = core.download_document(
+                input_url=url,
+                scroll_delay=req.scroll_delay,
+                cdp_timeout=req.cdp_timeout,
+                settle_timeout=req.settle_timeout,
+                headless=req.headless,
+                status_cb=status_callback,
+                progress_cb=progress_callback,
+                log_cb=log_callback,
+            )
+            task["documents"][document_number - 1]["status"] = "COMPLETED"
+            task["completed_documents"] += 1
+            task["results"].append(result)
+            task["progress_percent"] = round((document_number / task["total_documents"]) * 100, 1)
+        except Exception as exc:
+            error = str(exc)
+            task["documents"][document_number - 1]["status"] = "FAILED"
+            task["failed_documents"] += 1
+            task["errors"].append({
+                "url": url,
+                "filename": task["filename"],
+                "error": error,
+            })
+            log_callback(f"Document {document_number}/{task['total_documents']} failed: {error}")
+            task["progress_percent"] = round((document_number / task["total_documents"]) * 100, 1)
+
+    task["progress_percent"] = 100.0
+    if task["failed_documents"] == task["total_documents"]:
         task["status"] = "FAILED"
         task["stage"] = "ERROR"
-        task["error"] = str(exc)
+        task["error"] = "All documents failed to download."
+    else:
+        task["status"] = "COMPLETED"
+        task["stage"] = "COMPLETED"
+        task["result"] = task["results"][0] if len(task["results"]) == 1 else None
+        if task["failed_documents"]:
+            task["warning"] = f"{task['failed_documents']} document(s) failed."
 
 
 @app.post("/api/download")
 def start_download(req: DownloadRequest):
-    url = req.url.strip()
-    if core.convert_scribd_link(url) == "Invalid Scribd URL":
-        raise HTTPException(status_code=400, detail="Invalid Scribd URL format.")
+    urls = parse_download_urls(req.url)
+    if not urls:
+        raise HTTPException(status_code=400, detail="Paste at least one Scribd URL.")
+
+    invalid_urls = [url for url in urls if core.convert_scribd_link(url) == "Invalid Scribd URL"]
+    if invalid_urls:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid Scribd URL format: {invalid_urls[0]}",
+        )
 
     task_id = str(uuid.uuid4())[:8]
     tasks_db[task_id] = {
         "task_id": task_id,
-        "url": url,
-        "filename": core.get_filename_from_url(url),
+        "url": urls[0] if len(urls) == 1 else "",
+        "urls": urls,
+        "filename": core.get_filename_from_url(urls[0]) if len(urls) == 1 else f"{len(urls)} documents",
+        "total_documents": len(urls),
+        "current_document": 1,
+        "completed_documents": 0,
+        "failed_documents": 0,
+        "documents": [
+            {"url": url, "filename": core.get_filename_from_url(url), "status": "PENDING"}
+            for url in urls
+        ],
         "status": "RUNNING",
         "stage": "INITIALIZING",
         "current_page": 0,
@@ -111,13 +186,20 @@ def start_download(req: DownloadRequest):
         "progress_percent": 0.0,
         "logs": [],
         "result": None,
+        "results": [],
+        "errors": [],
         "error": None,
     }
 
-    thread = threading.Thread(target=run_download_task, args=(task_id, req), daemon=True)
+    thread = threading.Thread(target=run_download_task, args=(task_id, req, urls), daemon=True)
     thread.start()
 
-    return {"task_id": task_id, "status": "RUNNING", "filename": tasks_db[task_id]["filename"]}
+    return {
+        "task_id": task_id,
+        "status": "RUNNING",
+        "filename": tasks_db[task_id]["filename"],
+        "document_count": len(urls),
+    }
 
 
 @app.get("/api/status/{task_id}")
@@ -146,12 +228,20 @@ async def stream_task_events(task_id: str):
                 "task_id": task_id,
                 "status": task["status"],
                 "stage": task["stage"],
+                "filename": task.get("filename", ""),
+                "total_documents": task.get("total_documents", 1),
+                "current_document": task.get("current_document", 1),
+                "completed_documents": task.get("completed_documents", 0),
+                "failed_documents": task.get("failed_documents", 0),
                 "current_page": task["current_page"],
                 "total_pages": task["total_pages"],
                 "progress_percent": task["progress_percent"],
                 "new_logs": new_logs,
                 "result": task.get("result"),
+                "results": task.get("results", []),
+                "errors": task.get("errors", []),
                 "error": task.get("error"),
+                "warning": task.get("warning"),
             }
             yield f"data: {json.dumps(payload)}\n\n"
 

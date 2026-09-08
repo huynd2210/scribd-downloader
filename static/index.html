@@ -57,22 +57,22 @@
 
                 <form id="download-form" onsubmit="handleDownload(event)">
                     <div class="input-group">
-                        <label for="scribd-url">Scribd Document URL</label>
+                        <label for="scribd-url">Scribd Document URLs</label>
                         <div class="input-wrapper">
                             <i class="fa-solid fa-link input-icon"></i>
-                            <input 
-                                type="url" 
+                            <textarea
                                 id="scribd-url" 
                                 name="url" 
-                                placeholder="https://www.scribd.com/document/123456789/Document-Title" 
+                                rows="5"
+                                placeholder="Paste one Scribd URL per line"
                                 required
                                 autocomplete="off"
-                                oninput="handleUrlInput(this.value)"
-                            />
+                                oninput="handleUrlInput(this.value)"></textarea>
                             <button type="button" class="clear-btn" id="clear-url-btn" onclick="clearUrlInput()">
                                 <i class="fa-solid fa-xmark"></i>
                             </button>
                         </div>
+                        <span class="setting-hint">One URL per line. Duplicate links are ignored.</span>
                         <div class="url-validation-msg" id="url-validation-msg"></div>
                     </div>
 
@@ -214,14 +214,8 @@
 
                     <!-- Completion Action Buttons -->
                     <div class="completion-actions hidden" id="completion-actions">
-                        <button type="button" class="btn btn-success" id="btn-preview-task" onclick="previewCurrentTask()">
-                            <i class="fa-solid fa-eye"></i>
-                            <span>Preview PDF</span>
-                        </button>
-                        <a id="btn-download-task" class="btn btn-primary" download>
-                            <i class="fa-solid fa-download"></i>
-                            <span>Download PDF</span>
-                        </a>
+                        <div class="completion-summary" id="completion-summary"></div>
+                        <div class="completion-downloads" id="completion-downloads"></div>
                     </div>
                 </div>
             </section>
